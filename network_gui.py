@@ -246,14 +246,6 @@ class NetworkDashboard:
             if mtime != self._last_mtime:
                 self._last_mtime = mtime
                 self._update_count = getattr(self, '_update_count', 0) + 1
-                
-                # File was modified
-                hosts_count = len(data.get('hosts', {}))
-                services_count = len(data.get('services', {}))
-                packets = data.get('stats', {}).get('packets_received', 0)
-                
-                # Log every update for visibility
-                self.log(f"Database updated #{self._update_count}: {hosts_count} hosts, {services_count} services, {packets} packets", 'info')
             
             return data
         except Exception as e:
