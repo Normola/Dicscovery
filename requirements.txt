@@ -1,0 +1,15 @@
+# Python dependencies for mDNS/DNS-SD tools
+# These tools use only Python standard library modules
+# No external dependencies required!
+
+# The following standard library modules are used:
+# - socket: Network communication
+# - struct: Binary data packing/unpacking
+# - sys: System operations
+# - time: Time operations
+# - signal: Signal handling
+# - argparse: Command-line argument parsing
+# - threading: Threading support
+# - datetime: Timestamp formatting
+
+# If you're running Python 3.6 or later, you should be all set!
