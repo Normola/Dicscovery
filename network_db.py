@@ -258,10 +258,12 @@ class NetworkDatabase:
 class MDNSMonitorDB:
     """Monitor mDNS traffic and update database."""
     
-    def __init__(self, database: NetworkDatabase, verbose: bool = False, active_mode: bool = False):
+    def __init__(self, database: NetworkDatabase, verbose: bool = False, active_mode: bool = False, query_interval: int = 300, interface: str = '0.0.0.0'):
         self.database = database
         self.verbose = verbose
         self.active_mode = active_mode
+        self.query_interval = query_interval
+        self.interface = interface
         self.running = False
         self.sock = None
         
@@ -403,8 +405,8 @@ class MDNSMonitorDB:
                 self.send_query(service)
                 time.sleep(0.1)  # Small delay between queries
             
-            # Wait before next query cycle (5 minutes)
-            for _ in range(300):
+            # Wait before next query cycle
+            for _ in range(self.query_interval):
                 if not self.running:
                     break
                 time.sleep(1)
@@ -542,10 +544,11 @@ class MDNSMonitorDB:
             if hasattr(socket, 'SO_REUSEPORT'):
                 self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
             
-            self.sock.bind(('', MDNS_PORT))
+            self.sock.bind((self.interface, MDNS_PORT))
             
             # Join multicast group
-            mreq = struct.pack('4s4s', socket.inet_aton(MDNS_ADDR), socket.inet_aton('0.0.0.0'))
+            interface_ip = self.interface if self.interface != '0.0.0.0' else '0.0.0.0'
+            mreq = struct.pack('4s4s', socket.inet_aton(MDNS_ADDR), socket.inet_aton(interface_ip))
             self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_ADD_MEMBERSHIP, mreq)
             
             self.sock.setsockopt(socket.IPPROTO_IP, socket.IP_MULTICAST_TTL, 255)
@@ -559,6 +562,7 @@ class MDNSMonitorDB:
             print(f"Database file: {self.database.db_file}")
             print(f"Auto-save interval: {self.database.auto_save_interval}s")
             print(f"Status update interval: {update_interval}s")
+            print(f"Network interface: {self.interface}")
             print(f"Active mode: {'Enabled (sending queries)' if self.active_mode else 'Disabled (passive only)'}")
             print(f"Press Ctrl+C to stop\n")
             
@@ -567,7 +571,8 @@ class MDNSMonitorDB:
                 import threading
                 query_thread = threading.Thread(target=self.send_periodic_queries, daemon=True)
                 query_thread.start()
-                print("[ACTIVE MODE] Sending discovery queries every 5 minutes...\n")
+                interval_str = f"{self.query_interval} seconds" if self.query_interval < 60 else f"{self.query_interval // 60} minutes"
+                print(f"[ACTIVE MODE] Sending discovery queries every {interval_str}...\n")
             
             last_status_update = time.time()
             
@@ -632,8 +637,8 @@ Examples:
   Show all devices (not just recent 10):
     python network_db.py --show-all
   
-  Active mode (send queries every 5 minutes):
-    python network_db.py --active
+  Active mode (send queries):
+    python network_db.py --active --query-interval 30
         ''')
     
     parser.add_argument('--db', default='network_db.json',
@@ -648,6 +653,10 @@ Examples:
                        help='Show all devices in status updates')
     parser.add_argument('-a', '--active', action='store_true',
                        help='Active mode: send periodic queries to discover devices (default: passive listening only)')
+    parser.add_argument('--query-interval', type=int, default=300,
+                       help='Query interval in seconds for active mode (default: 300 = 5 minutes)')
+    parser.add_argument('--interface', default='0.0.0.0',
+                       help='Network interface IP to bind to (default: 0.0.0.0 = all interfaces)')
     
     args = parser.parse_args()
     
@@ -655,7 +664,7 @@ Examples:
     database = NetworkDatabase(db_file=args.db, auto_save_interval=args.save_interval)
     
     # Create monitor
-    monitor = MDNSMonitorDB(database=database, verbose=args.verbose, active_mode=args.active)
+    monitor = MDNSMonitorDB(database=database, verbose=args.verbose, active_mode=args.active, query_interval=args.query_interval, interface=args.interface)
     
     # Handle graceful shutdown
     def signal_handler(sig, frame):

@@ -20,7 +20,7 @@ class NetworkDashboard:
     """Real-time GUI dashboard for network database."""
     
     def __init__(self, db_file: str = "network_db.json", run_collector: bool = True, 
-                 active_mode: bool = True, update_interval: int = 30):
+                 active_mode: bool = True, update_interval: int = 30, query_interval: int = 300, interface: str = '0.0.0.0'):
         self.db_file = Path(db_file)
         self.running = True
         self.refresh_interval = 2000  # milliseconds
@@ -28,6 +28,11 @@ class NetworkDashboard:
         self.run_collector = run_collector
         self.collector_active_mode = active_mode
         self.collector_update_interval = update_interval
+        self.collector_query_interval = query_interval
+        self.collector_interface = interface
+        
+        # Filter settings
+        self.show_offline = True  # Show offline devices by default
         
         # Create main window
         self.root = tk.Tk()
@@ -44,7 +49,7 @@ class NetworkDashboard:
         
         # Start collector after UI is ready
         if run_collector:
-            self.start_collector(active_mode, update_interval)
+            self.start_collector(active_mode, update_interval, query_interval, interface)
         
         # Start update loop
         self.update_display()
@@ -223,6 +228,18 @@ class NetworkDashboard:
         ttk.Button(control_frame, text="Clear Log", command=self.clear_log).pack(
             side=tk.LEFT, padx=5)
         
+        # Filter controls
+        ttk.Separator(control_frame, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=10)
+        
+        self.show_offline_var = tk.BooleanVar(value=True)
+        self.show_offline_check = ttk.Checkbutton(
+            control_frame,
+            text="Show Offline Devices (> 1h)",
+            variable=self.show_offline_var,
+            command=self.on_filter_change
+        )
+        self.show_offline_check.pack(side=tk.LEFT, padx=5)
+        
         self.status_label = ttk.Label(control_frame, text="Initializing...", foreground='blue')
         self.status_label.pack(side=tk.RIGHT, padx=10)
     
@@ -302,7 +319,7 @@ class NetworkDashboard:
     
     def update_hosts_table(self, data):
         """Update hosts table."""
-        # Save selected item
+        # Save selected item and scroll position
         selected = self.hosts_tree.selection()
         selected_hostname = None
         if selected:
@@ -312,6 +329,9 @@ class NetworkDashboard:
                     selected_hostname = values[0]  # hostname is first column
             except:
                 pass
+        
+        # Save scroll position
+        yview_position = self.hosts_tree.yview()
         
         # Clear existing
         for item in self.hosts_tree.get_children():
@@ -325,6 +345,9 @@ class NetworkDashboard:
             key=lambda x: x[1].get('last_seen', ''),
             reverse=True
         )
+        
+        # Apply offline filter
+        show_offline = self.show_offline_var.get()
         
         for hostname, host_data in sorted_hosts:
             ips = ', '.join(sorted(host_data.get('ips', [])))
@@ -355,6 +378,10 @@ class NetworkDashboard:
                 except:
                     tag = 'unknown'
             
+            # Skip offline devices if filter is enabled
+            if not show_offline and tag == 'offline':
+                continue
+            
             item_id = self.hosts_tree.insert('', tk.END, values=(
                 hostname, ips, first_seen, last_seen, count
             ), tags=(tag,))
@@ -362,7 +389,12 @@ class NetworkDashboard:
             # Restore selection
             if selected_hostname and hostname == selected_hostname:
                 self.hosts_tree.selection_set(item_id)
-                self.hosts_tree.see(item_id)
+        
+        # Restore scroll position
+        try:
+            self.hosts_tree.yview_moveto(yview_position[0])
+        except:
+            pass
         
         # Configure tags with colors
         self.hosts_tree.tag_configure('recent', background='#e8f5e9', foreground='#2e7d32')   # Green
@@ -373,7 +405,7 @@ class NetworkDashboard:
     
     def update_services_table(self, data):
         """Update services table."""
-        # Save expanded state and selection
+        # Save expanded state, selection, and scroll position
         expanded_items = set()
         selected = self.services_tree.selection()
         selected_instance = None
@@ -384,6 +416,9 @@ class NetworkDashboard:
                 # Get the service type text
                 service_type = self.services_tree.item(item, 'text')
                 expanded_items.add(service_type)
+        
+        # Save scroll position
+        yview_position = self.services_tree.yview()
         
         # Save selected item
         if selected:
@@ -469,7 +504,12 @@ class NetworkDashboard:
                 # Restore selection
                 if selected_instance and instance_name == selected_instance and service_text == selected_parent:
                     self.services_tree.selection_set(child_id)
-                    self.services_tree.see(child_id)
+        
+        # Restore scroll position
+        try:
+            self.services_tree.yview_moveto(yview_position[0])
+        except:
+            pass
     
     def update_raw_display(self, data):
         """Update raw database display."""
@@ -556,7 +596,14 @@ class NetworkDashboard:
         self.refresh_interval = int(self.refresh_var.get()) * 1000
         self.log(f"Refresh rate changed to {self.refresh_var.get()} seconds", 'info')
     
-    def start_collector(self, active_mode: bool, update_interval: int):
+    def on_filter_change(self):
+        """Handle filter toggle change."""
+        show_offline = self.show_offline_var.get()
+        status = "shown" if show_offline else "hidden"
+        self.log(f"Offline devices now {status}", 'info')
+        self.force_refresh()
+    
+    def start_collector(self, active_mode: bool, update_interval: int, query_interval: int, interface: str):
         """Start the network database collector in a subprocess."""
         try:
             cmd = [
@@ -565,11 +612,13 @@ class NetworkDashboard:
                 'network_db.py',
                 '--db', str(self.db_file),
                 '--save-interval', str(update_interval),  # How often to save database
-                '--update-interval', str(update_interval)  # How often to show status
+                '--update-interval', str(update_interval),  # How often to show status
+                '--interface', interface
             ]
             
             if active_mode:
                 cmd.append('--active')
+                cmd.extend(['--query-interval', str(query_interval)])
             
             # Check if network_db.py exists
             if not Path('network_db.py').exists():
@@ -718,6 +767,10 @@ Two-process mode (advanced):
                        help='Enable active querying mode in collector')
     parser.add_argument('--update-interval', type=int, default=30,
                        help='Collector update interval in seconds (default: 30)')
+    parser.add_argument('--query-interval', type=int, default=300,
+                       help='Query interval in seconds for active mode (default: 300 = 5 minutes)')
+    parser.add_argument('--interface', default='0.0.0.0',
+                       help='Network interface IP to bind to (default: 0.0.0.0 = all interfaces)')
     
     args = parser.parse_args()
     
@@ -726,7 +779,9 @@ Two-process mode (advanced):
         db_file=args.db,
         run_collector=not args.no_collector,
         active_mode=args.active,
-        update_interval=args.update_interval
+        update_interval=args.update_interval,
+        query_interval=args.query_interval,
+        interface=args.interface
     )
     dashboard.refresh_interval = args.refresh * 1000
     dashboard.run()
